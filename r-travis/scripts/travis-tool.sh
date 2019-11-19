@@ -6,11 +6,12 @@ set -e
 # Comment out this line for quieter output:
 set -x
 
-CRAN=${CRAN:-"https://cran.rstudio.com"}
+CRAN=${CRAN:-"https://cloud.r-project.org"}
 BIOC=${BIOC:-"http://bioconductor.org/biocLite.R"}
-PKGTYPE=${PKGTYPE:-"both"}
+PKGTYPE=${PKGTYPE:-"win.binary"}
 BIOC_USE_DEVEL=${BIOC_USE_DEVEL:-"TRUE"}
 OS=$(uname -s)
+DOWNLOAD_FILE_METHOD=${DOWNLOAD_FILE_METHOD:-"auto"}
 
 PANDOC_VERSION='1.13.1'
 PANDOC_DIR="${HOME}/opt/pandoc"
@@ -27,10 +28,22 @@ PATH="${PATH}:/usr/texbin"
 R_BUILD_ARGS=${R_BUILD_ARGS-"--no-manual"}
 R_CHECK_ARGS=${R_CHECK_ARGS-"--no-manual --as-cran"}
 
-R_USE_BIOC_CMDS="source('${BIOC}');"\
+R_VERSION_TEST="getRversion() >= '3.5.0'"
+
+R_USE_BIOC_INST="source('${BIOC}');"\
 " tryCatch(useDevel(${BIOC_USE_DEVEL}),"\
 " error=function(e) {if (!grepl('already in use', e$message)) {e}});"\
-" options(repos=biocinstallRepos());"
+" options(repos=biocinstallRepos())"
+
+R_USE_BIOC_MNGR="if (!requireNamespace('BiocManager', quietly=TRUE))"\
+" install.packages('BiocManager', repos=c(CRAN='${CRAN}'));"\
+" if (${BIOC_USE_DEVEL})"\
+" BiocManager::install(version = 'devel', ask = FALSE);"\
+" options(repos=BiocManager::repositories())"
+
+R_USE_BIOC_CMDS="if (${R_VERSION_TEST}) {${R_USE_BIOC_MNGR}} else {${R_USE_BIOC_INST}};"
+
+BIOC_INSTALL="{if (${R_VERSION_TEST}) BiocManager::install else BiocInstaller::biocLite}"
 
 Bootstrap() {
     if [[ "Darwin" == "${OS}" ]]; then
@@ -148,7 +161,7 @@ EnsureRemotes() {
     fi
     if ! Rscript -e 'if (!("remotes" %in% rownames(installed.packages()))) q(status=1)' ; then
         # Fallback: Install remotes from URL.
-        Rscript -e 'path <- file.path(tempdir(), "remotes_1.0.0.tar.gz"); download.file("http://cran.r-project.org/src/contrib/remotes_1.0.0.tar.gz", path); install.packages(path, repos = NULL, type = "source")'
+        Rscript -e 'path <- file.path(tempdir(), "remotes_1.0.0.tar.gz"); download.file("http://cran.r-project.org/src/contrib/Archive/remotes/remotes_1.0.0.tar.gz", path); install.packages(path, repos = NULL, type = "source")'
     fi
 }
 
@@ -194,7 +207,7 @@ RInstall() {
     fi
 
     echo "Installing R package(s): $@"
-    Rscript -e 'install.packages(commandArgs(TRUE), repos="'"${CRAN}"'", INSTALL_opts="--no-multiarch", type="'"${PKGTYPE}"'")' "$@"
+    Rscript -e 'install.packages(commandArgs(TRUE), repos="'"${CRAN}"'", INSTALL_opts="", type="'"${PKGTYPE}"'")' "$@"
 }
 
 BiocInstall() {
@@ -204,7 +217,7 @@ BiocInstall() {
     fi
 
     echo "Installing R Bioconductor package(s): $@"
-    Rscript -e "${R_USE_BIOC_CMDS}"' biocLite(commandArgs(TRUE))' "$@"
+    Rscript -e "${R_USE_BIOC_CMDS}"" ${BIOC_INSTALL}(commandArgs(TRUE))" "$@"
 }
 
 RBinaryInstall() {
@@ -231,12 +244,14 @@ InstallGithub() {
 
     echo "Installing GitHub packages: $@"
     # Install the package.
-    Rscript -e 'options(repos=c(CRAN="'"${CRAN}"'")); remotes::install_github(commandArgs(TRUE))' "$@"
+    Rscript -e 'options(repos = c(CRAN = "'"${CRAN}"'"), download.file.method = "'"${DOWNLOAD_FILE_METHOD}"'"); remotes::install_github(commandArgs(TRUE), type="'"${PKGTYPE}"'")' "$@"
 }
 
 InstallDeps() {
     EnsureRemotes
-    Rscript -e 'options(repos=c(CRAN="'"${CRAN}"'")); remotes::install_deps(dependencies = TRUE, type="'"${PKGTYPE}"'")'
+
+    echo "Installing dependencies"
+    Rscript -e 'options(repos = c(CRAN = "'"${CRAN}"'"), download.file.method = "'"${DOWNLOAD_FILE_METHOD}"'"); remotes::install_deps(dependencies = TRUE, type="'"${PKGTYPE}"'")'
 }
 
 InstallBiocDeps() {
@@ -276,10 +291,12 @@ DumpLogs() {
 
 RunTests() {
     echo "Building with: R CMD build ${R_BUILD_ARGS}"
-    if [[ "${OS:0:5}" == "MINGW" || "${OS:0:4}" == "MSYS" ]]; then
-        if [[ -d vignettes ]]; then
-            rm -rf vignettes
-            Rscript -e "d <- read.dcf('DESCRIPTION'); d[, colnames(d) == 'VignetteBuilder'] <- NA; write.dcf(d, 'DESCRIPTION')"
+    if [[ "${KEEP_VIGNETTES}" == "" ]]; then
+        if [[ "${OS:0:5}" == "MINGW" || "${OS:0:4}" == "MSYS" ]]; then
+            if [[ -d vignettes ]]; then
+                rm -rf vignettes
+                Rscript -e "d <- read.dcf('DESCRIPTION'); d[, colnames(d) == 'VignetteBuilder'] <- NA; write.dcf(d, 'DESCRIPTION')"
+            fi
         fi
     fi
     R CMD build ${R_BUILD_ARGS} .
@@ -288,7 +305,7 @@ RunTests() {
 
     # Create binary package (currently Windows only)
     if [[ "${OS:0:5}" == "MINGW" || "${OS:0:4}" == "MSYS" ]]; then
-        R_CHECK_INSTALL_ARGS="--install-args=--build --no-multiarch"
+        R_CHECK_INSTALL_ARGS="--install-args=--build"
     fi
 
     echo "Testing with: R CMD check \"${FILE}\" ${R_CHECK_ARGS} ${R_CHECK_INSTALL_ARGS}"

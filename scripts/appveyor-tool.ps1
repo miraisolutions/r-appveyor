@@ -1,4 +1,10 @@
-$CRAN = "https://cloud.r-project.org"
+if ( -not(Test-Path Env:\CRAN) ) {
+  $CRAN = "https://cloud.r-project.org"
+}
+Else {
+  $CRAN = $env:CRAN
+}
+
 
 # Found at http://zduck.com/2012/powershell-batch-files-exit-codes/
 Function Exec
@@ -53,7 +59,7 @@ Function InstallR {
   }
 
   if ( -not(Test-Path Env:\R_ARCH) ) {
-    $arch = "i386"
+    $arch = "x64"
   }
   Else {
     $arch = $env:R_ARCH
@@ -158,7 +164,7 @@ Function Bootstrap {
 
   InstallR
 
-  if ((Test-Path "src") -or ($env:USE_RTOOLS)) {
+  if ((Test-Path "src") -or ($env:USE_RTOOLS -eq "true") -or ($env:USE_RTOOLS -eq "yes")) {
     InstallRtools
   }
   Else {
@@ -166,10 +172,10 @@ Function Bootstrap {
   }
 
   Progress "Downloading and installing travis-tool.sh"
-  Invoke-WebRequest https://raw.github.com/krlmlr/r-appveyor/master/r-travis/scripts/travis-tool.sh -OutFile "..\travis-tool.sh"
+  Invoke-WebRequest https://raw.githubusercontent.com/krlmlr/r-appveyor/master/r-travis/scripts/travis-tool.sh -OutFile "..\travis-tool.sh"
   echo '@bash.exe ../travis-tool.sh %*' | Out-File -Encoding ASCII .\travis-tool.sh.cmd
   cat .\travis-tool.sh.cmd
-  bash -c "echo '^travis-tool\.sh\.cmd$' >> .Rbuildignore"
+  bash -c "( echo; echo '^travis-tool\.sh\.cmd$' ) >> .Rbuildignore"
   cat .\.Rbuildignore
 
   $env:PATH.Split(";")
